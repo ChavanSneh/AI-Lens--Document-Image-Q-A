@@ -1,7 +1,12 @@
-import io, re, json, os
+import io
+import re
+import json
+import os
 from PIL import Image
 import pytesseract
 from google import genai
+from google.genai import types  # <-- Needed for config formatting
+from pydantic import BaseModel  
 from ultralytics import YOLO
 from dotenv import load_dotenv
 
@@ -13,7 +18,12 @@ if not api_key:
     raise ValueError("GOOGLE_API_KEY not found")
 
 client = genai.Client(api_key=api_key)
-yolo_model = YOLO("yolov8n.pt") # nano model; swap for yolov8s/m/l if you want
+yolo_model = YOLO("yolov8n.pt") 
+
+# 1. Define the exact JSON structure you want from Gemini
+class ImageAnalysis(BaseModel):
+    image_type: str
+    visual_description: str
 
 def ocr_image(file_bytes: bytes) -> str:
     image = Image.open(io.BytesIO(file_bytes)).convert("L")
@@ -34,18 +44,23 @@ def yolo_detect(file_bytes: bytes) -> dict:
 
 def vision_describe(file_bytes: bytes) -> dict:
     img = Image.open(io.BytesIO(file_bytes))
-    prompt = """
-Describe this image in JSON with fields:
-- "image_type": e.g. receipt, photo, screenshot, document
-- "visual_description": 1-2 sentence summary of what you see
-Return ONLY JSON.
-"""
-    resp = client.models.generate_content(
-        model="gemini-2.5-flash-lite",
-        contents=[prompt, img]
-    )
-    m = re.search(r"\{.*\}", resp.text, re.S)
-    return json.loads(m.group(0)) if m else {"image_type": None, "visual_description": None}
+    
+    prompt = "Analyze this image and break down its details."
+    
+    # Corrected SDK layout using types.GenerateContentConfig
+    try:
+        resp = client.models.generate_content(
+            model="gemini-2.5-flash-lite",
+            contents=[prompt, img],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=ImageAnalysis,
+            ),
+        )
+        return json.loads(resp.text)
+    except Exception:
+        # Absolute bulletproof fallback safety net
+        return {"image_type": "unknown", "visual_description": "Failed to parse analysis"}
 
 def run_dual_pipelines(file_bytes: bytes) -> dict:
     # Pipeline A: OCR
