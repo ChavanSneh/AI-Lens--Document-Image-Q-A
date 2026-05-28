@@ -10,9 +10,13 @@ from backend.services.qa_service import answer_question
 from backend.services.vision_service import run_dual_pipelines
 from backend.services.suggestions_service import generate_suggestions
 
-st.set_page_config(page_title="AI Lens", page_icon="👁️")
+st.set_page_config(page_title="AI Lens", page_icon="👁️", layout="wide")
 
 st.title("👁️ AI Lens - Document & Image Q&A")
+
+# Initialize global history tracking across session loops
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
 
 uploaded_file = st.file_uploader(
     "Upload image, PDF, DOCX or TXT",
@@ -23,31 +27,32 @@ uploaded_file = st.file_uploader(
 if uploaded_file:
     file_bytes = uploaded_file.read()
 
-    # We only process if doc_id isn't already in session state (prevents re-running on every click)
     if "doc_id" not in st.session_state:
         # IMAGE FLOW
         if uploaded_file.type.startswith("image/"):
             result = run_dual_pipelines(file_bytes)
             description = result.get("visual_description") or ""
             ocr_text = result.get("extracted_text") or ""
+            detected_objs = result.get("detected_objects") or []
+            image_type = result.get("image_type") or "image"
             
             if len(ocr_text.strip()) < 20:
                 ocr_text = ""
 
-            full_text = f"{description}\n\n{ocr_text}"
+            # Pack all visual telemetry together so the QA service gets full context
+            full_text = f"Contextual Metadata:\n- Type: {image_type}\n- Scene Details: {description}\n- Found Items: {detected_objs}\n\nExtracted Reading Content:\n{ocr_text}"
             doc_id = save_document(full_text)
             st.session_state.doc_id = doc_id
-            st.success("Image processed")
+            st.success("Image processed successfully")
         
         # DOCUMENT FLOW
         else:
             result = process_document(file_bytes, uploaded_file.name)
             doc_id = save_document(result["text"])
             st.session_state.doc_id = doc_id
-            st.success("Document processed")
+            st.success("Document processed successfully")
 
     # --- Suggestions ---
-    # Fetch text once doc_id is available
     text = get_document(st.session_state.doc_id)
 
     if "suggestions" not in st.session_state:
@@ -60,45 +65,63 @@ if uploaded_file:
         st.subheader("💡 Suggested Questions")
 
     with col2:
-        if st.button("🔄"):
+        if st.button("Refresh Suggestions 🔄"):
             st.session_state.suggestions = generate_suggestions(text)
             st.rerun()
 
-    # Indented loop to avoid NameError
+    # Render out suggested questions
     suggestions = st.session_state.get("suggestions", [])
     for q in suggestions:
-        if st.button(q):
-            st.session_state.user_question = q  # Fills the text bar
+        if st.button(q, use_container_width=True):
+            st.session_state.pending_suggestion = q
             st.rerun()
 
-    # --- Ask Section ---
+    # --- Interactive Chat History Window ---
     st.divider()
     st.subheader("💬 Ask a Question")
 
-    # Linked to st.session_state.user_question
-    user_q = st.text_input("Type your question here", key="user_question")
+    # This container traps the logs inside a smooth scroll block instead of blowing up your footer layout
+    chat_container = st.container(height=400)
+    with chat_container:
+        for chat in st.session_state.chat_history:
+            with st.chat_message(chat["role"]):
+                st.write(chat["text"])
 
-    if st.button("Ask"):
-        if user_q:
-            doc_id = st.session_state.get("doc_id")
-            current_text = get_document(doc_id) if doc_id else ""
+    # Read user submission (Checks for standard entry fields or button suggestion transfers)
+    user_q = st.chat_input("Type a question here about your uploaded file...")
+    
+    if st.session_state.get("pending_suggestion"):
+        user_q = st.session_state.pop("pending_suggestion")
 
-            with st.spinner("Thinking..."):
-                ans = answer_question(current_text, user_q)
-                st.session_state.answer = ans
-        else:
-            st.warning("Please enter a question or click a suggestion first.")
+    if user_q:
+        # Display instantly into the live container block
+        with chat_container:
+            with st.chat_message("user"):
+                st.write(user_q)
+        
+        st.session_state.chat_history.append({"role": "user", "text": user_q})
 
-    # Display answer
-    if "answer" in st.session_state and st.session_state.answer:
-        st.subheader("🤖 Bot Answer")
-        st.text_area(
-            label="Response", 
-            value=st.session_state.answer, 
-            height=200, 
-            disabled=True
-        )
+        doc_id = st.session_state.get("doc_id")
+        current_text = get_document(doc_id) if doc_id else ""
+
+        with st.spinner("Thinking..."):
+            # Stitch the history into a conversation string for Gemini context mapping
+            history_context = ""
+            for msg in st.session_state.chat_history[:-1]:
+                prefix = "User: " if msg["role"] == "user" else "Assistant: "
+                history_context += f"{prefix}{msg['text']}\n"
+            
+            enhanced_prompt = f"Document Data:\n{current_text}\n\nPast Conversation Logs:\n{history_context}\nCurrent Question: {user_q}"
+            
+            ans = answer_question(current_text, enhanced_prompt)
+            
+            # Save response data and display immediately
+            st.session_state.chat_history.append({"role": "assistant", "text": ans})
+            with chat_container:
+                with st.chat_message("assistant"):
+                    st.write(ans)
+
 else:
-    # Optional: Clear state if file is removed
-    st.info("Please upload a file to begin.")
+    # Drop all session logs clean if an image or file is deleted
     st.session_state.clear()
+    st.info("Please upload a file to begin.")
