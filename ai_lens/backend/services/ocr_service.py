@@ -15,7 +15,7 @@ try:
     from google  import genai
     from dotenv import load_dotenv
     load_dotenv()
-    client = genai.Client(api_key=api_key)
+    api_key = os.getenv("GROQ_API_KEY")
     GEMINI_AVAILABLE = True
 except Exception:
     GEMINI_AVAILABLE = False
@@ -54,6 +54,7 @@ def process_txt(file_bytes: bytes) -> str:
 def clean_text(text: str) -> str:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     return "\n".join(lines)
+    pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 def interpret_with_llm(text: str) -> dict:
     if not GEMINI_AVAILABLE:

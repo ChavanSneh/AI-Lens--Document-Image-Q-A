@@ -22,7 +22,19 @@ uploaded_file = st.file_uploader(
     "Upload image, PDF, DOCX or TXT",
     type=["png", "jpg", "jpeg", "pdf", "docx", "txt"]
 )
-
+# --- IMAGE PREVIEW PATCH ---
+if uploaded_file is not None:
+    file_type = uploaded_file.type
+    if "image" in file_type:
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            st.markdown("### 📸 Uploaded Preview")
+            st.image(uploaded_file, caption=uploaded_file.name, use_container_width=True)
+        with col2:
+            st.info(f"**File:** {uploaded_file.name} | **Size:** {uploaded_file.size/1024:.1f} KB | Ready for Q&A")
+    elif "pdf" in file_type:
+        st.info(f"📄 PDF uploaded: {uploaded_file.name} - {uploaded_file.size/1024:.1f} KB")
+        
 # --- Upload Handling ---
 if uploaded_file:
     file_bytes = uploaded_file.read()
